@@ -20,8 +20,9 @@ const functions = require('firebase-functions');
 const gcs = require('@google-cloud/storage')();
 const spawn = require('child-process-promise').spawn;
 const admin = require('firebase-admin');
+const nodeTwitterApi = require("node-twitter-api");
 const adminSdkPrivateKey = require('./diggity-development-firebase-adminsdk-private-key.json');
-const instagramConfig = require('./instagram-config.json');
+const socialConfig = require('./social-config.json');
 const request = require('request');
 const cors = require('cors')({ origin: true });
 // [END import]
@@ -148,6 +149,405 @@ exports.generateThumbnail = functions.storage.object().onChange(event => {
 });
 // [END generateThumbnail]
 
+// [START handleSocialLogin]
+/**
+ * Handle Social login using Facebook, Google, Instagram & Twitter.
+ */
+// [START handleSocialLoginTrigger]
+exports.handleSocialLogin = functions.https.onRequest((req, res) => {
+    cors(req, res, () => {
+        if (req && req.query && req.query.client_id && req.query.redirect_uri && req.query.redirect_uri === socialConfig.redirectUrl) {
+            let twitterApi = new nodeTwitterApi({
+                consumerKey: socialConfig.twitter.consumerKey,
+                consumerSecret: socialConfig.twitter.consumerSecret,
+                callback: socialConfig.redirectUrl
+            });
+
+            twitterApi.getRequestToken(function(error, requestToken, requestSecret) {
+                if (!error && requestToken && requestSecret) {
+                    let updates = {};
+                    updates[`/twitterRequestTokenSecrets/${req.query.client_id}`] = requestSecret;
+                    admin.database().ref().update(updates).then(() => {
+                        res.redirect(`https://api.twitter.com/oauth/authenticate?oauth_token=${requestToken}`);
+                    }).catch(() => {
+                        console.log("Unable to save Twitter RequestTokenSecret");
+                        res.redirect(socialConfig.redirectUrl);
+                    });
+                } else {
+                    console.log("Error fetching Twitter Request Token:", error);
+                    res.redirect(socialConfig.redirectUrl);
+                }
+            });
+        } else if (req && req.query && (req.query.provider && (req.query.provider === "facebook" || req.query.provider === "google" || req.query.provider === "instagram" || req.query.provider === "twitter")) && req.query.code) {
+            let islinking = req.query.uid ? true : false;
+
+            let promiseFirebaseUserRecordForLinking = Promise.resolve({});
+            if (islinking) {
+                promiseFirebaseUserRecordForLinking = admin.auth().getUser(req.query.uid).then((userRecord) => {
+                    if (userRecord) {
+                        return Promise.resolve(userRecord);
+                    } else {
+                        return Promise.resolve(null);
+                    }
+                }).catch(() => {
+                    return Promise.resolve(null);
+                });
+            }
+            promiseFirebaseUserRecordForLinking.then(firebaseUserRecordForLinking => {
+                if (firebaseUserRecordForLinking) {
+                    let socialLoginHandle = function(socialAccessToken, socialUserId, socialUserEmail, socialUserName, socialUserProfilePictureUrl, socialAccessSecret) {
+                        admin.database().ref(`/socialIdentities/${req.query.provider}/${socialUserId}`).once("value").then(function (snapshot) {
+                            let socialIdentity = snapshot.val();
+                            if (islinking && socialIdentity) {
+                                res.status(200).send({ socialUserAlreadyExists: true });
+                            } else {
+                                let promiseFirebaseUserRecordByEmail = Promise.resolve(null);
+                                if (!islinking && !socialIdentity && socialUserEmail) {
+                                    promiseFirebaseUserRecordByEmail = admin.auth().getUserByEmail(socialUserEmail).then((userRecord) => {
+                                        if (userRecord) {
+                                            return Promise.resolve(userRecord);
+                                        } else {
+                                            return Promise.resolve(null);
+                                        }
+                                    }).catch(() => {
+                                        return Promise.resolve(null);
+                                    });
+                                }
+                                promiseFirebaseUserRecordByEmail.then(firebaseUserRecordByEmail => {
+                                    if (firebaseUserRecordByEmail) {
+                                        admin.database().ref(`/userSocialIdentities/${firebaseUserRecordByEmail.uid}`).once("value").then(function (snapshot) {
+                                            let firebaseUserSocialIdentities = snapshot.val();
+
+                                            let socialProviders = [];
+                                            for(let provider in firebaseUserSocialIdentities) {
+                                                socialProviders.push(provider);
+                                            }
+
+                                            res.status(200).send({
+                                                emailAlreadyExists: true,
+                                                email: socialUserEmail,
+                                                socialProviders: socialProviders,
+                                                socialUser: {
+                                                    provider: req.query.provider,
+                                                    id: socialUserId,
+                                                    accessToken: socialAccessToken,
+                                                    accessSecret: socialAccessSecret
+                                                }
+                                            });
+                                        }).catch(() => {
+                                            res.status(200).send({ error: true });
+                                        });
+                                    } else {
+                                        let firebaseUserId = (islinking ? req.query.uid : (socialIdentity && socialIdentity.firebaseUserId ? socialIdentity.firebaseUserId : `${req.query.provider}UserId::${socialUserId}`));
+
+                                        let updates = {};
+                                        updates[`/socialIdentities/${req.query.provider}/${socialUserId}`] = {
+                                            accessToken: socialAccessToken,
+                                            firebaseUserId: firebaseUserId
+                                        };
+                                        if (socialAccessSecret) {
+                                            updates[`/socialIdentities/${req.query.provider}/${socialUserId}`].accessSecret = socialAccessSecret;
+                                        }
+                                        updates[`/userSocialIdentities/${firebaseUserId}/${req.query.provider}`] = {
+                                            userId: socialUserId
+                                        };
+
+                                        admin.database().ref().update(updates).then(() => {
+                                            let isUpdatedUserPropertiesFound = false;
+                                            let userProperties = {};
+
+                                            if ((!firebaseUserRecordForLinking.displayName || firebaseUserRecordForLinking.displayName === "") && socialUserName) {
+                                                userProperties.displayName = socialUserName;
+                                                isUpdatedUserPropertiesFound = true;
+                                            }
+                                            if ((!firebaseUserRecordForLinking.photoURL || firebaseUserRecordForLinking.photoURL === "") && socialUserProfilePictureUrl) {
+                                                userProperties.photoURL = socialUserProfilePictureUrl;
+                                                isUpdatedUserPropertiesFound = true;
+                                            }
+                                            if (!islinking && !socialIdentity && socialUserEmail) {
+                                                userProperties.email = socialUserEmail;
+                                                isUpdatedUserPropertiesFound = true;
+                                            }
+
+                                            let promiseUpdateOrCreateFirebaseUser = Promise.resolve();
+                                            if (isUpdatedUserPropertiesFound) {
+                                                promiseUpdateOrCreateFirebaseUser = admin.auth().updateUser(firebaseUserId, userProperties).catch(error => {
+                                                    if (!islinking && error.code === "auth/user-not-found") {
+                                                        userProperties.uid = firebaseUserId;
+
+                                                        return admin.auth().createUser(userProperties).catch(() => {
+                                                            return Promise.resolve();
+                                                        });
+                                                    } else {
+                                                        return Promise.resolve();
+                                                    }
+                                                });
+                                            }
+
+                                            promiseUpdateOrCreateFirebaseUser.then(() => {
+                                                if (islinking) {
+                                                    res.status(200).send({ islinked: true });
+                                                } else {
+                                                    admin.auth().createCustomToken(firebaseUserId).then((customToken) => {
+                                                        res.status(200).send({ token: customToken });
+                                                    }).catch(() => {
+                                                        res.status(200).send({ error: true });
+                                                    });
+                                                }
+                                            });
+                                        }).catch(() => {
+                                            res.status(200).send({ error: true });
+                                        });
+                                    }
+                                });
+                            }
+                        }).catch(() => {
+                            res.status(200).send({ error: true });
+                        });
+                    };
+
+                    if (req.query.provider === "twitter") {
+                        let isQueryCodeParseable = true;
+                        try {
+                            req.query.code = JSON.parse(req.query.code);
+                        } catch (e) {
+                            console.log("Code is not parsable:", {
+                                query: req.query,
+                                parseError: e
+                            });
+                            isQueryCodeParseable = false;
+                        }
+                        if (isQueryCodeParseable) {
+                            if (req.query.client_id) {
+                                admin.database().ref(`/twitterRequestTokenSecrets/${req.query.client_id}`).once("value").then(function (snapshot) {
+                                    let twitterRequestTokenSecret = snapshot.val();
+                                    if (twitterRequestTokenSecret) {
+                                        let updates = {};
+                                        updates[`/twitterRequestTokenSecrets/${req.query.client_id}`] = null;
+                                        let promiseRemoveTwitterRequestTokenSecret = admin.database().ref().update(updates).then(() => {
+                                        }).catch(() => {
+                                            console.log("Unable to remove Twitter RequestTokenSecret");
+                                        });
+                                        promiseRemoveTwitterRequestTokenSecret.then(() => {
+                                            if (req.query.code.oauth_token && req.query.code.oauth_verifier) {
+                                                let twitterApi = new nodeTwitterApi({
+                                                    consumerKey: socialConfig.twitter.consumerKey,
+                                                    consumerSecret: socialConfig.twitter.consumerSecret,
+                                                    callback: socialConfig.redirectUrl
+                                                });
+
+                                                twitterApi.getAccessToken(req.query.code.oauth_token, twitterRequestTokenSecret, req.query.code.oauth_verifier, function(error, accessToken, accessSecret) {
+                                                    if (!error && accessToken && accessSecret) {
+                                                        twitterApi.verifyCredentials(accessToken, accessSecret, {include_email: true}, function(error, twitterUser) {
+                                                            if (!error && twitterUser && twitterUser.id) {
+                                                                let socialUserEmail;
+                                                                let socialUserName;
+                                                                let socialUserProfilePictureUrl;
+
+                                                                if (twitterUser.email) {
+                                                                    socialUserEmail = twitterUser.email;
+                                                                }
+
+                                                                if (twitterUser.name) {
+                                                                    socialUserName = twitterUser.name;
+                                                                }
+
+                                                                if (twitterUser.profile_image_url) {
+                                                                    socialUserProfilePictureUrl = twitterUser.profile_image_url;
+                                                                } else if (twitterUser.profile_image_url_https) {
+                                                                    socialUserProfilePictureUrl = twitterUser.profile_image_url_https;
+                                                                }
+                                                                socialLoginHandle(accessToken, twitterUser.id, socialUserEmail, socialUserName, socialUserProfilePictureUrl, accessSecret);
+                                                            } else {
+                                                                console.log("Error verifying Twitter Access Token:", error);
+                                                                res.status(200).send({ error: true });
+                                                            }
+                                                        });
+                                                    } else {
+                                                        console.log("Error fetching Twitter Access Token:", error);
+                                                        res.status(200).send({ error: true });
+                                                    }
+                                                });
+                                            } else {
+                                                res.status(200).send({ error: true });
+                                            }
+                                        });
+                                    } else {
+                                        console.log("Unable to retrieve Twitter RequestTokenSecret");
+                                        res.status(200).send({ error: true });
+                                    }
+                                }).catch(() => {
+                                    console.log("Unable to retrieve Twitter RequestTokenSecret");
+                                    res.status(200).send({ error: true });
+                                });
+                            } else {
+                                res.status(200).send({ error: true });
+                            }
+                        } else {
+                            res.status(200).send({ error: true });
+                        }
+                    } else {
+                        let postData;
+                        if (req.query.provider === "facebook") {
+                            postData = {
+                                url: socialConfig.facebook.oAuthUrl,
+                                form: {
+                                    client_id: socialConfig.facebook.clientId,
+                                    client_secret: socialConfig.facebook.clientSecret,
+                                    grant_type: socialConfig.grantType,
+                                    redirect_uri: socialConfig.redirectUrl,
+                                    code: req.query.code
+                                }
+                            };
+                        } else if (req.query.provider === "google") {
+                            postData = {
+                                url: socialConfig.google.oAuthUrl,
+                                form: {
+                                    client_id: socialConfig.google.clientId,
+                                    client_secret: socialConfig.google.clientSecret,
+                                    grant_type: socialConfig.grantType,
+                                    redirect_uri: socialConfig.redirectUrl,
+                                    code: req.query.code
+                                }
+                            };
+                        } else if (req.query.provider === "instagram") {
+                            postData = {
+                                url: socialConfig.instagram.oAuthUrl,
+                                form: {
+                                    client_id: socialConfig.instagram.clientId,
+                                    client_secret: socialConfig.instagram.clientSecret,
+                                    grant_type: socialConfig.grantType,
+                                    redirect_uri: socialConfig.redirectUrl,
+                                    code: req.query.code
+                                }
+                            };
+                        }
+                        request.post(postData, function (error, response, body) {
+                            let isPostBodyParseable = true;
+                            try {
+                                body = JSON.parse(body);
+                            } catch (e) {
+                                console.log("Token Response body is not parsable:", {
+                                    query: req.query,
+                                    postData: postData,
+                                    error: error,
+                                    response: response,
+                                    body: body,
+                                    parseError: e
+                                });
+                                isPostBodyParseable = false;
+                            }
+                            if (isPostBodyParseable) {
+                                if (!error && response && response.statusCode === 200 && body && body.access_token) {
+                                    let socialAccessToken = body.access_token;
+
+                                    let getData;
+                                    if (req.query.provider === "facebook") {
+                                        getData = {
+                                            url: `https://graph.facebook.com/v2.9/me?fields=id,email,name,picture&access_token=${socialAccessToken}`
+                                        };
+                                    } else if (req.query.provider === "google") {
+                                        getData = {
+                                            url: `https://www.googleapis.com/oauth2/v1/userinfo?access_token=${socialAccessToken}`
+                                        };
+                                    } else if (req.query.provider === "instagram") {
+                                        getData = {
+                                            url: `https://api.instagram.com/v1/users/self?access_token=${socialAccessToken}`
+                                        };
+                                    }
+                                    request.get(getData, function (error, response, body) {
+                                        let isGetBodyParseable = true;
+                                        try {
+                                            body = JSON.parse(body);
+                                        } catch (e) {
+                                            console.log("Profile Response body is not parsable:", {
+                                                query: req.query,
+                                                getData: getData,
+                                                error: error,
+                                                response: response,
+                                                body: body,
+                                                parseError: e
+                                            });
+                                            isGetBodyParseable = false;
+                                        }
+                                        if (isGetBodyParseable) {
+                                            if (!error && response && response.statusCode === 200 && ((req.query.provider === "facebook" && body.id) || (req.query.provider === "google" && body.id) || (req.query.provider === "instagram" && body.data && body.data.id))) {
+                                                let socialUserId;
+                                                let socialUserEmail;
+                                                let socialUserName;
+                                                let socialUserProfilePictureUrl;
+
+                                                if (req.query.provider === "facebook") {
+                                                    socialUserId = body.id;
+                                                    if (body.email) socialUserEmail = body.email;
+                                                    if (body.name) socialUserName = body.name;
+                                                    if (body.picture && body.picture.data && body.picture.data.url) socialUserProfilePictureUrl = body.picture.data.url;
+                                                } else if (req.query.provider === "google") {
+                                                    socialUserId = body.id;
+                                                    if (body.email) socialUserEmail = body.email;
+                                                    if (body.name) socialUserName = body.name;
+                                                    if (body.picture) socialUserProfilePictureUrl = body.picture;
+                                                } else if (req.query.provider === "instagram") {
+                                                    socialUserId = body.data.id;
+                                                    if (body.data.full_name) socialUserName = body.data.full_name;
+                                                    if (body.data.profile_picture) socialUserProfilePictureUrl = body.data.profile_picture;
+                                                }
+                                                
+                                                socialLoginHandle(socialAccessToken, socialUserId, socialUserEmail, socialUserName, socialUserProfilePictureUrl);
+                                            } else {
+                                                console.log("Unexpected Profile response:", {
+                                                    query: req.query,
+                                                    getData: getData,
+                                                    error: error,
+                                                    response: response,
+                                                    body: body
+                                                });
+                                                res.status(200).send({ error: true });
+                                            }
+                                        } else {
+                                            res.status(200).send({ error: true });
+                                        }
+                                    });
+                                } else {
+                                    console.log("Unexpected Token Response:", {
+                                        query: req.query,
+                                        postData: postData,
+                                        error: error,
+                                        response: response,
+                                        body: body
+                                    });
+                                    if (body && ((body.error && body.error.message) || body.error_description || body.error_message)) {
+                                        res.status(200).send({ message: (body.error_description || body.error_message || body.error.message) });
+                                    } else {
+                                        res.status(200).send({ error: true });
+                                    }
+                                }
+                            } else {
+                                res.status(200).send({ error: true });
+                            }
+                        });
+                    }
+                } else {
+                    console.log("Unable to find firebase user to link in request:", req.query);
+                    res.status(200).send({ error: true });
+                }
+            });
+        } else {
+            console.log("Error in request:", req.query);
+            res.status(200).send({ error: true });
+        }
+    });
+});
+// [END handleSocialLoginTrigger]
+// [END handleSocialLogin]
+
+
+
+
+
+
+
+
 // [START handleInstagramLogin]
 /**
  * Handle Instagram login.
@@ -175,12 +575,12 @@ exports.handleInstagramLogin = functions.https.onRequest((req, res) => {
                     let instagramAuthCode = req.query.code;
 
                     request.post({
-                        url: instagramConfig.instagramOauthUrl,
+                        url: socialConfig.instagram.oAuthUrl,
                         form: {
-                            client_id: instagramConfig.instagramClientId,
-                            client_secret: instagramConfig.instagramClientSecret,
+                            client_id: socialConfig.instagram.clientId,
+                            client_secret: socialConfig.instagram.clientSecret,
                             grant_type: "authorization_code",
-                            redirect_uri: instagramConfig.redirectUrl,
+                            redirect_uri: socialConfig.redirectUrl,
                             code: instagramAuthCode
                         }
                     }, function (error, response, body) {

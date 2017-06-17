@@ -1,0 +1,23 @@
+{
+  "facebook": {
+    "clientId": "725766850936539",
+    "clientSecret": "dc93528bceb41b9d295bc2542974ffe1",
+    "oAuthUrl": "https://graph.facebook.com/v2.9/oauth/access_token"
+  },
+  "google": {
+    "clientId": "981687652447-3rv6a21l820f3iv0vbkb170og4l8n0ts.apps.googleusercontent.com",
+    "clientSecret": "DtF4-wME49LURC-21l40vjiu",
+    "oAuthUrl": "https://www.googleapis.com/oauth2/v4/token"
+  },
+  "instagram": {
+    "clientId": "67c3a6c5bff34863809b9a29e7e00e61",
+    "clientSecret": "4830789ab33d4c71bbc88fd214146ad0",
+    "oAuthUrl": "https://api.instagram.com/oauth/access_token"
+  },
+  "twitter": {
+    "consumerKey": "Ru3YHuliuvUbw6FLUCIuNNTva",
+    "consumerSecret": "CdrVEhl5vBYamEUGCyPy19JbwBOAMmzizwlz2GFEHhqv7KYbgH"
+  },
+  "redirectUrl": "http://localhost:8100/callback",
+  "grantType": "authorization_code"
+}
