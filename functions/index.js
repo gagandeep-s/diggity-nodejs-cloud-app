@@ -163,7 +163,7 @@ exports.handleSocialLogin = functions.https.onRequest((req, res) => {
                 callback: socialConfig.redirectUrl
             });
 
-            twitterApi.getRequestToken(function(error, requestToken, requestSecret) {
+            twitterApi.getRequestToken(function (error, requestToken, requestSecret) {
                 if (!error && requestToken && requestSecret) {
                     let updates = {};
                     updates[`/twitterRequestTokenSecrets/${req.query.client_id}`] = requestSecret;
@@ -178,7 +178,7 @@ exports.handleSocialLogin = functions.https.onRequest((req, res) => {
                     res.redirect(socialConfig.redirectUrl);
                 }
             });
-        } else if (req && req.query && (req.query.provider && (req.query.provider === "facebook" || req.query.provider === "google" || req.query.provider === "instagram" || req.query.provider === "twitter")) && req.query.code) {
+        } else if (req && req.query && (req.query.provider && (req.query.provider === "facebook" || (req.query.provider === "google" || req.query.provider === "google-cordova") || req.query.provider === "instagram" || req.query.provider === "twitter")) && req.query.code) {
             let islinking = req.query.uid ? true : false;
 
             let promiseFirebaseUserRecordForLinking = Promise.resolve({});
@@ -195,7 +195,7 @@ exports.handleSocialLogin = functions.https.onRequest((req, res) => {
             }
             promiseFirebaseUserRecordForLinking.then(firebaseUserRecordForLinking => {
                 if (firebaseUserRecordForLinking) {
-                    let socialLoginHandle = function(socialAccessToken, socialUserId, socialUserEmail, socialUserName, socialUserProfilePictureUrl, socialAccessSecret) {
+                    let socialLoginHandle = function (socialUserAccessToken, socialUserId, socialUserEmail, socialUserName, socialUserProfilePictureUrl, socialUserExtraData) {
                         admin.database().ref(`/socialIdentities/${req.query.provider}/${socialUserId}`).once("value").then(function (snapshot) {
                             let socialIdentity = snapshot.val();
                             if (islinking && socialIdentity) {
@@ -219,7 +219,7 @@ exports.handleSocialLogin = functions.https.onRequest((req, res) => {
                                             let firebaseUserSocialIdentities = snapshot.val();
 
                                             let socialProviders = [];
-                                            for(let provider in firebaseUserSocialIdentities) {
+                                            for (let provider in firebaseUserSocialIdentities) {
                                                 socialProviders.push(provider);
                                             }
 
@@ -230,8 +230,8 @@ exports.handleSocialLogin = functions.https.onRequest((req, res) => {
                                                 socialUser: {
                                                     provider: req.query.provider,
                                                     id: socialUserId,
-                                                    accessToken: socialAccessToken,
-                                                    accessSecret: socialAccessSecret
+                                                    accessToken: socialUserAccessToken,
+                                                    extraData: socialUserExtraData
                                                 }
                                             });
                                         }).catch(() => {
@@ -242,11 +242,15 @@ exports.handleSocialLogin = functions.https.onRequest((req, res) => {
 
                                         let updates = {};
                                         updates[`/socialIdentities/${req.query.provider}/${socialUserId}`] = {
-                                            accessToken: socialAccessToken,
+                                            accessToken: socialUserAccessToken,
                                             firebaseUserId: firebaseUserId
                                         };
-                                        if (socialAccessSecret) {
-                                            updates[`/socialIdentities/${req.query.provider}/${socialUserId}`].accessSecret = socialAccessSecret;
+                                        if (socialUserExtraData) {
+                                            for (let socialUserExtraDataKey in socialUserExtraData) {
+                                                if (socialUserExtraData[socialUserExtraDataKey]) {
+                                                    updates[`/socialIdentities/${req.query.provider}/${socialUserId}`][socialUserExtraDataKey] = socialUserExtraData[socialUserExtraDataKey];
+                                                }
+                                            }
                                         }
                                         updates[`/userSocialIdentities/${firebaseUserId}/${req.query.provider}`] = {
                                             userId: socialUserId
@@ -306,7 +310,124 @@ exports.handleSocialLogin = functions.https.onRequest((req, res) => {
                         });
                     };
 
-                    if (req.query.provider === "twitter") {
+                    if (req.query.provider === "google-cordova") {
+                        req.query.provider = "google";
+
+                        let isQueryCodeParseable = true;
+                        try {
+                            req.query.code = JSON.parse(req.query.code);
+                        } catch (e) {
+                            console.log("Code is not parsable:", {
+                                query: req.query,
+                                parseError: e
+                            });
+                            isQueryCodeParseable = false;
+                        }
+                        if (isQueryCodeParseable) {
+                            let socialUserId;
+                            let socialUserEmail;
+                            let socialUserName;
+                            let socialUserProfilePictureUrl;
+                            let socialUserServerAuthCode;
+                            let socialUserIdToken;
+                            let socialUserAccessToken;
+                            let socialUserRefreshToken;
+
+                            if (req.query.code.userId) {
+                                socialUserId = req.query.code.userId;
+                            }
+
+                            if (req.query.code.email) {
+                                socialUserEmail = req.query.code.email;
+                            }
+
+                            if (req.query.code.displayName) {
+                                socialUserName = req.query.code.displayName;
+                            }
+
+                            if (req.query.code.imageUrl) {
+                                socialUserProfilePictureUrl = req.query.code.imageUrl;
+                            }
+
+                            if (req.query.code.serverAuthCode) {
+                                socialUserServerAuthCode = req.query.code.serverAuthCode;
+                            }
+
+                            if (req.query.code.idToken) {
+                                socialUserIdToken = req.query.code.idToken;
+                            }
+
+                            if (req.query.code.accessToken) {
+                                socialUserAccessToken = req.query.code.accessToken;
+                            }
+
+                            if (req.query.code.refreshToken) {
+                                socialUserRefreshToken = req.query.code.refreshToken;
+                            }
+
+                            if (socialUserAccessToken) {
+                                socialLoginHandle(socialUserAccessToken, socialUserId, socialUserEmail, socialUserName, socialUserProfilePictureUrl, {
+                                    serverAuthCode: socialUserServerAuthCode,
+                                    idToken: socialUserIdToken,
+                                    refreshToken: socialUserRefreshToken
+                                });
+                            } else if (socialUserServerAuthCode) {
+                                request.post({
+                                    url: socialConfig.google.oAuthUrl,
+                                    form: {
+                                        client_id: socialConfig.google.clientId,
+                                        client_secret: socialConfig.google.clientSecret,
+                                        grant_type: socialConfig.grantType,
+                                        redirect_uri: socialConfig.redirectUrl,
+                                        code: socialUserServerAuthCode
+                                    }
+                                }, function (error, response, body) {
+                                    let isPostBodyParseable = true;
+                                    try {
+                                        body = JSON.parse(body);
+                                    } catch (e) {
+                                        console.log("Token Response body is not parsable:", {
+                                            query: req.query,
+                                            postData: postData,
+                                            error: error,
+                                            response: response,
+                                            body: body,
+                                            parseError: e
+                                        });
+                                        isPostBodyParseable = false;
+                                    }
+                                    if (isPostBodyParseable) {
+                                        if (!error && response && response.statusCode === 200 && body && body.access_token) {
+                                            socialLoginHandle(body.access_token, socialUserId, socialUserEmail, socialUserName, socialUserProfilePictureUrl, {
+                                                serverAuthCode: socialUserServerAuthCode,
+                                                idToken: socialUserIdToken,
+                                                refreshToken: socialUserRefreshToken
+                                            });
+                                        } else {
+                                            console.log("Unexpected Token Response:", {
+                                                query: req.query,
+                                                postData: postData,
+                                                error: error,
+                                                response: response,
+                                                body: body
+                                            });
+                                            if (body && ((body.error && body.error.message) || body.error_description || body.error_message)) {
+                                                res.status(200).send({ message: (body.error_description || body.error_message || body.error.message) });
+                                            } else {
+                                                res.status(200).send({ error: true });
+                                            }
+                                        }
+                                    } else {
+                                        res.status(200).send({ error: true });
+                                    }
+                                });
+                            } else {
+                                res.status(200).send({ error: true });
+                            }
+                        } else {
+                            res.status(200).send({ error: true });
+                        }
+                    } else if (req.query.provider === "twitter") {
                         let isQueryCodeParseable = true;
                         try {
                             req.query.code = JSON.parse(req.query.code);
@@ -336,9 +457,9 @@ exports.handleSocialLogin = functions.https.onRequest((req, res) => {
                                                     callback: socialConfig.redirectUrl
                                                 });
 
-                                                twitterApi.getAccessToken(req.query.code.oauth_token, twitterRequestTokenSecret, req.query.code.oauth_verifier, function(error, accessToken, accessSecret) {
+                                                twitterApi.getAccessToken(req.query.code.oauth_token, twitterRequestTokenSecret, req.query.code.oauth_verifier, function (error, accessToken, accessSecret) {
                                                     if (!error && accessToken && accessSecret) {
-                                                        twitterApi.verifyCredentials(accessToken, accessSecret, {include_email: true}, function(error, twitterUser) {
+                                                        twitterApi.verifyCredentials(accessToken, accessSecret, { include_email: true }, function (error, twitterUser) {
                                                             if (!error && twitterUser && twitterUser.id) {
                                                                 let socialUserEmail;
                                                                 let socialUserName;
@@ -357,7 +478,10 @@ exports.handleSocialLogin = functions.https.onRequest((req, res) => {
                                                                 } else if (twitterUser.profile_image_url_https) {
                                                                     socialUserProfilePictureUrl = twitterUser.profile_image_url_https;
                                                                 }
-                                                                socialLoginHandle(accessToken, twitterUser.id, socialUserEmail, socialUserName, socialUserProfilePictureUrl, accessSecret);
+
+                                                                socialLoginHandle(accessToken, twitterUser.id, socialUserEmail, socialUserName, socialUserProfilePictureUrl, {
+                                                                    accessSecret: accessSecret
+                                                                });
                                                             } else {
                                                                 console.log("Error verifying Twitter Access Token:", error);
                                                                 res.status(200).send({ error: true });
@@ -439,20 +563,20 @@ exports.handleSocialLogin = functions.https.onRequest((req, res) => {
                             }
                             if (isPostBodyParseable) {
                                 if (!error && response && response.statusCode === 200 && body && body.access_token) {
-                                    let socialAccessToken = body.access_token;
+                                    let socialUserAccessToken = body.access_token;
 
                                     let getData;
                                     if (req.query.provider === "facebook") {
                                         getData = {
-                                            url: `https://graph.facebook.com/v2.9/me?fields=id,email,name,picture&access_token=${socialAccessToken}`
+                                            url: `https://graph.facebook.com/v2.9/me?fields=id,email,name,picture&access_token=${socialUserAccessToken}`
                                         };
                                     } else if (req.query.provider === "google") {
                                         getData = {
-                                            url: `https://www.googleapis.com/oauth2/v1/userinfo?access_token=${socialAccessToken}`
+                                            url: `https://www.googleapis.com/oauth2/v1/userinfo?access_token=${socialUserAccessToken}`
                                         };
                                     } else if (req.query.provider === "instagram") {
                                         getData = {
-                                            url: `https://api.instagram.com/v1/users/self?access_token=${socialAccessToken}`
+                                            url: `https://api.instagram.com/v1/users/self?access_token=${socialUserAccessToken}`
                                         };
                                     }
                                     request.get(getData, function (error, response, body) {
@@ -492,8 +616,8 @@ exports.handleSocialLogin = functions.https.onRequest((req, res) => {
                                                     if (body.data.full_name) socialUserName = body.data.full_name;
                                                     if (body.data.profile_picture) socialUserProfilePictureUrl = body.data.profile_picture;
                                                 }
-                                                
-                                                socialLoginHandle(socialAccessToken, socialUserId, socialUserEmail, socialUserName, socialUserProfilePictureUrl);
+
+                                                socialLoginHandle(socialUserAccessToken, socialUserId, socialUserEmail, socialUserName, socialUserProfilePictureUrl);
                                             } else {
                                                 console.log("Unexpected Profile response:", {
                                                     query: req.query,
@@ -540,143 +664,3 @@ exports.handleSocialLogin = functions.https.onRequest((req, res) => {
 });
 // [END handleSocialLoginTrigger]
 // [END handleSocialLogin]
-
-
-
-
-
-
-
-
-// [START handleInstagramLogin]
-/**
- * Handle Instagram login.
- */
-// [START handleInstagramLoginTrigger]
-exports.handleInstagramLogin = functions.https.onRequest((req, res) => {
-    cors(req, res, () => {
-        if (req && req.query && req.query.code) {
-            let islinking = req.query.uid ? true : false;
-
-            let promiseFirebaseUserRecordForLinking = Promise.resolve({});
-            if (islinking) {
-                promiseFirebaseUserRecordForLinking = admin.auth().getUser(req.query.uid).then((userRecord) => {
-                    if (userRecord) {
-                        return Promise.resolve(userRecord);
-                    } else {
-                        return Promise.resolve(null);
-                    }
-                }).catch(() => {
-                    return Promise.resolve(null);
-                });
-            }
-            promiseFirebaseUserRecordForLinking.then(firebaseUserRecordForLinking => {
-                if (firebaseUserRecordForLinking) {
-                    let instagramAuthCode = req.query.code;
-
-                    request.post({
-                        url: socialConfig.instagram.oAuthUrl,
-                        form: {
-                            client_id: socialConfig.instagram.clientId,
-                            client_secret: socialConfig.instagram.clientSecret,
-                            grant_type: "authorization_code",
-                            redirect_uri: socialConfig.redirectUrl,
-                            code: instagramAuthCode
-                        }
-                    }, function (error, response, body) {
-                        let isBodyParseable = true;
-
-                        try {
-                            body = JSON.parse(body);
-                        } catch (e) {
-                            isBodyParseable = false;
-                        }
-
-                        if (isBodyParseable) {
-                            if (!error && response && response.statusCode === 200 && body && body.access_token && body.user && body.user.id) {
-                                let instagramUserId = body.user.id;
-
-                                admin.database().ref("/instagramIdentities/" + instagramUserId).once("value").then(function (snapshot) {
-                                    let instagramIdentity = snapshot.val();
-
-                                    if (islinking && instagramIdentity) {
-                                        res.status(200).send({ instagramUserAlreadyExists: true });
-                                    } else {
-                                        let firebaseUserId = (islinking ? req.query.uid : (instagramIdentity && instagramIdentity.firebaseUserId ? instagramIdentity.firebaseUserId : "instagramUserId::" + instagramUserId));
-
-                                        let updates = {};
-                                        updates["/instagramIdentities/" + instagramUserId] = {
-                                            accessToken: body.access_token,
-                                            firebaseUserId: firebaseUserId,
-                                            user: body.user
-                                        };
-                                        updates["/userInstagramIdentities/" + firebaseUserId] = {
-                                            instagramUserId: instagramUserId
-                                        };
-
-                                        admin.database().ref().update(updates).then(() => {
-                                            let isUserPropertiesFound = false;
-                                            let userProperties = {};
-
-                                            if ((!firebaseUserRecordForLinking.displayName || firebaseUserRecordForLinking.displayName === "") && body.user.full_name) {
-                                                userProperties.displayName = body.user.full_name;
-                                                isUserPropertiesFound = true;
-                                            }
-                                            if ((!firebaseUserRecordForLinking.photoURL || firebaseUserRecordForLinking.photoURL === "") && body.user.profile_picture) {
-                                                userProperties.photoURL = body.user.profile_picture;
-                                                isUserPropertiesFound = true;
-                                            }
-
-                                            let promiseUpdateOrCreateFirebaseUser = Promise.resolve();
-                                            if (isUserPropertiesFound) {
-                                                promiseUpdateOrCreateFirebaseUser = admin.auth().updateUser(firebaseUserId, userProperties).catch(error => {
-                                                    if (!islinking && error.code === "auth/user-not-found") {
-                                                        userProperties.uid = firebaseUserId;
-
-                                                        return admin.auth().createUser(userProperties).catch(() => {
-                                                            return Promise.resolve();
-                                                        });
-                                                    } else {
-                                                        return Promise.resolve();
-                                                    }
-                                                });
-                                            }
-
-                                            promiseUpdateOrCreateFirebaseUser.then(() => {
-                                                if (islinking) {
-                                                    res.status(200).send({ islinked: true });
-                                                } else {
-                                                    admin.auth().createCustomToken(firebaseUserId).then((customToken) => {
-                                                        res.status(200).send({ token: customToken });
-                                                    }).catch(() => {
-                                                        res.status(200).send({ error: true });
-                                                    });
-                                                }
-                                            });
-                                        }).catch(() => {
-                                            res.status(200).send({ error: true });
-                                        });
-                                    }
-                                }).catch(() => {
-                                    res.status(200).send({ error: true });
-                                });
-                            } else if (body && body.error_message) {
-                                res.status(200).send({ message: body.error_message });
-                            } else {
-                                res.status(200).send({ error: true });
-                            }
-                        } else {
-                            res.status(200).send({ error: true });
-                        }
-                    });
-                } else {
-                    res.status(200).send({ error: true });
-                }
-            });
-        } else {
-            res.status(200).send({ error: true });
-        }
-    });
-});
-// [END handleInstagramLoginTrigger]
-// [END handleInstagramLogin]

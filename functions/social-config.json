@@ -5,8 +5,8 @@
     "oAuthUrl": "https://graph.facebook.com/v2.9/oauth/access_token"
   },
   "google": {
-    "clientId": "981687652447-3rv6a21l820f3iv0vbkb170og4l8n0ts.apps.googleusercontent.com",
-    "clientSecret": "DtF4-wME49LURC-21l40vjiu",
+    "clientId": "819087572789-82rljq436ivp3pmgb8a09q81bil8a6m7.apps.googleusercontent.com",
+    "clientSecret": "vg8GlaYI6k2IN69SntToWluI",
     "oAuthUrl": "https://www.googleapis.com/oauth2/v4/token"
   },
   "instagram": {
