@@ -600,6 +600,7 @@ exports.handleSocialLogin = functions.https.onRequest((req, res) => {
                                                 let socialUserEmail;
                                                 let socialUserName;
                                                 let socialUserProfilePictureUrl;
+                                                let socialUserExtraData;
 
                                                 if (req.query.provider === "facebook") {
                                                     socialUserId = body.id;
@@ -611,13 +612,16 @@ exports.handleSocialLogin = functions.https.onRequest((req, res) => {
                                                     if (body.email) socialUserEmail = body.email;
                                                     if (body.name) socialUserName = body.name;
                                                     if (body.picture) socialUserProfilePictureUrl = body.picture;
+                                                    socialUserExtraData = {
+                                                        serverAuthCode: req.query.code
+                                                    };
                                                 } else if (req.query.provider === "instagram") {
                                                     socialUserId = body.data.id;
                                                     if (body.data.full_name) socialUserName = body.data.full_name;
                                                     if (body.data.profile_picture) socialUserProfilePictureUrl = body.data.profile_picture;
                                                 }
 
-                                                socialLoginHandle(socialUserAccessToken, socialUserId, socialUserEmail, socialUserName, socialUserProfilePictureUrl);
+                                                socialLoginHandle(socialUserAccessToken, socialUserId, socialUserEmail, socialUserName, socialUserProfilePictureUrl, socialUserExtraData);
                                             } else {
                                                 console.log("Unexpected Profile response:", {
                                                     query: req.query,
