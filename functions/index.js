@@ -669,15 +669,15 @@ exports.handleSocialLogin = functions.https.onRequest((req, res) => {
 // [END handleSocialLoginTrigger]
 // [END handleSocialLogin]
 
-
-
-
-
-// [START ashishSendNotification]
-exports.ashishSendNotification = functions.https.onRequest((req, res) => {
+// [START sendTestNotification]
+/**
+ * Handle sending test notifications to a user.
+ */
+// [START sendTestNotificationTrigger]
+exports.sendTestNotification = functions.https.onRequest((req, res) => {
     cors(req, res, () => {
         if (req && req.query && req.query.userId && req.query.title && req.query.body) {
-console.log("ASHISH Request Data:", {
+console.log("Request Data:", {
     userId: req.query.userId,
     title : req.query.title,
     body : req.query.body,
@@ -693,7 +693,7 @@ console.log("NotificationTockens:", notificationTokens);
                         tokens.push(notificationToken);
                     }
 console.log("Tockens:", tokens);
-                    if (tokens.length > 0) {
+                    if (tokens.length > 0) { //TODODEV: You can send messages to up to 1,000 devices in a single request. If you provide an array with over 1,000 registration tokens, the request will fail with a messaging/invalid-recipient error.
                         let payload = {
                             notification: {
                                 title: req.query.title, //iOS, Android, Web: The notification's title.
@@ -721,14 +721,21 @@ console.log("Tockens:", tokens);
 console.log("Notification Sent:", response);
                             res.status(200).send();
                         }).catch(reason => {
-console.log("Notification Reason:", reason);
+console.log("Notification Sent Reason:", reason);
                             res.status(200).send();
                         });
                     } else {
+console.log("NotificationTokens not found");
                         res.status(200).send();
                     }
                 }
-            }).catch(() => {
+else {
+    console.log("NotificationTokens not found");
+}
+            }).catch((
+reason
+            ) => {
+console.log("NotificationTokens query Reason: ", reason);
                 res.status(200).send();
             });
         } else {
@@ -736,16 +743,5 @@ console.log("Notification Reason:", reason);
         }
     });
 });
-// [END ashishSendNotification]
-
-// [START ashishConsoleLog]
-exports.ashishConsoleLog = functions.https.onRequest((req, res) => {
-    cors(req, res, () => {
-        if (req && req.query && req.query.ashishMessage && req.query.ashishValue) {
-            console.log(req.query.ashishMessage, JSON.parse(req.query.ashishValue));
-        }
-
-        res.status(200).send();
-    });
-});
-// [END ashishConsoleLog]
+// [END sendTestNotificationTrigger]
+// [END sendTestNotification]
