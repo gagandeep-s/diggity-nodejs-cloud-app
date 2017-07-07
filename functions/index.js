@@ -23,8 +23,43 @@ const admin = require('firebase-admin');
 const nodeTwitterApi = require("node-twitter-api");
 const adminSdkPrivateKey = require('./diggity-development-firebase-adminsdk-private-key.json');
 const socialConfig = require('./social-config.json');
+const i18n = {
+    en: require('./i18n/en.json')
+};
+const activityTypes = {
+    diaryAdded: "diary_added",
+    diaryDeleted: "diary_deleted",
+    diaryLiked: "diary_like",
+    diaryCommented: "diary_commented",
+
+    entryAdded: "entry_added",
+    entryDeleted: "entry_deleted",
+    entryLiked: "entry_like",
+    entryCommented: "entry_commented",
+
+    storyAdded: "story_added",
+    storyDeleted: "story_deleted",
+    storyLiked: "story_like",
+    storyCommented: "story_commented",
+
+    imageAdded: "image_added",
+    imageDeleted: "image_deleted",
+    imageLiked: "image_like",
+    imageCommented: "image_commented",
+
+    collectionAdded: "collection_added",    
+    collectionDeleted: "collection_deleted",    
+    collectionLiked: "collection_like",
+    collectionCommented: "collection_commented",
+
+    videoAdded: "video_added",
+    videoDeleted: "video_deleted",
+    videoLiked: "video_like",
+    videoCommented: "video_commented"
+};
 const request = require('request');
 const cors = require('cors')({ origin: true });
+const moment = require('moment');
 // [END import]
 
 const firebaseConfig = functions.config().firebase;
@@ -81,22 +116,22 @@ exports.generateThumbnail = functions.storage.object().onChange(event => {
 
     // [START stopConditions]
     // Exit if this is triggered on a file that is not an image.
-    if (!contentType.startsWith('image/')) {
-        console.log('This is not an image.');
+    if (!contentType.startsWith("image/")) {
+        console.log("This is not an image.");
         return;
     }
 
     // Get the file name.
-    const fileName = filePath.split('/').pop();
+    const fileName = filePath.split("/").pop();
     // Exit if the image is already a thumbnail.
-    if (fileName.startsWith('thumb_')) {
-        console.log('Already a Thumbnail.');
+    if (fileName.startsWith("thumb_")) {
+        console.log("Already a Thumbnail.");
         return;
     }
 
     // Exit if this is a move or deletion event.
-    if (resourceState === 'not_exists') {
-        console.log('This is a deletion event.');
+    if (resourceState === "not_exists") {
+        console.log("This is a deletion event.");
         return;
     }
     // [END stopConditions]
@@ -108,15 +143,15 @@ exports.generateThumbnail = functions.storage.object().onChange(event => {
     return bucket.file(filePath).download({
         destination: tempFilePath
     }).then(() => {
-        console.log('Image downloaded locally to', tempFilePath);
+        console.log("Image downloaded locally to", tempFilePath);
 
         // Generate a thumbnail using ImageMagick.
 
         // 200x200 
-        spawn('convert', [tempFilePath, '-thumbnail', '200x200>', tempFilePath]).then(() => {
-            console.log('Thumbnail created at', tempFilePath);
+        spawn("convert", [tempFilePath, "-thumbnail", "200x200>", tempFilePath]).then(() => {
+            console.log("Thumbnail created at", tempFilePath);
             // We add a 'thumb_' prefix to thumbnails file name. That's where we'll upload the thumbnail.
-            const thumbFilePath = fileName + '/' + filePath.replace(/(\/)?([^\/]*)$/, `$1thumb_$2_200_200`);
+            const thumbFilePath = fileName + "/" + filePath.replace(/(\/)?([^\/]*)$/, `$1thumb_$2_200_200`);
             // Uploading the thumbnail.
             return bucket.upload(tempFilePath, {
                 destination: thumbFilePath
@@ -124,10 +159,10 @@ exports.generateThumbnail = functions.storage.object().onChange(event => {
         });
 
         // 400x400 
-        spawn('convert', [tempFilePath, '-thumbnail', '400x400>', tempFilePath]).then(() => {
-            console.log('Thumbnail created at', tempFilePath);
+        spawn("convert", [tempFilePath, "-thumbnail", "400x400>", tempFilePath]).then(() => {
+            console.log("Thumbnail created at", tempFilePath);
             // We add a 'thumb_' prefix to thumbnails file name. That's where we'll upload the thumbnail.
-            const thumbFilePath = fileName + '/' + filePath.replace(/(\/)?([^\/]*)$/, `$1thumb_$2_400_400`);
+            const thumbFilePath = fileName + "/" + filePath.replace(/(\/)?([^\/]*)$/, `$1thumb_$2_400_400`);
             // Uploading the thumbnail.
             return bucket.upload(tempFilePath, {
                 destination: thumbFilePath
@@ -135,10 +170,10 @@ exports.generateThumbnail = functions.storage.object().onChange(event => {
         });
 
         // 600x600 
-        return spawn('convert', [tempFilePath, '-thumbnail', '600x600>', tempFilePath]).then(() => {
-            console.log('Thumbnail created at', tempFilePath);
+        return spawn("convert", [tempFilePath, "-thumbnail", "600x600>", tempFilePath]).then(() => {
+            console.log("Thumbnail created at", tempFilePath);
             // We add a 'thumb_' prefix to thumbnails file name. That's where we'll upload the thumbnail.
-            const thumbFilePath = fileName + '/' + filePath.replace(/(\/)?([^\/]*)$/, `$1thumb_$2_600_600`);
+            const thumbFilePath = fileName + "/" + filePath.replace(/(\/)?([^\/]*)$/, `$1thumb_$2_600_600`);
             // Uploading the thumbnail.
             return bucket.upload(tempFilePath, {
                 destination: thumbFilePath
@@ -669,6 +704,320 @@ exports.handleSocialLogin = functions.https.onRequest((req, res) => {
 // [END handleSocialLoginTrigger]
 // [END handleSocialLogin]
 
+// [START sendNotificationsOnDiaryActivity]
+/**
+ * Handle sending notifications on diary activity.
+ */
+// [START sendNotificationsOnDiaryActivityTrigger]
+exports.sendNotificationsOnDiaryActivity = functions.database.ref("/activities/diaries/{diaryId}/{activityId}").onWrite(event => {
+    if (event.data.exists() && !event.data.previous.exists()) {
+        let diaryId = event.params.diaryId;
+        let activityId = event.params.activityId;
+        let activity = event.data.val();
+
+        return admin.database().ref(`/diaries/${diaryId}`).once("value").then(snapshot => {
+            let diary = snapshot.val();
+
+            if (diary && diary.ownerName && diary.ownerPersonId) {
+                let diaryName = diary.ownerName;
+                let diaryOwnerPersonId = diary.ownerPersonId;
+
+                return admin.database().ref(`/persons/${diaryOwnerPersonId}/members`).once("value").then(snapshot => {
+                    let diaryOwnerPersonMemberPersonIds = [diaryOwnerPersonId];
+
+                    snapshot.forEach(member => {
+                        diaryOwnerPersonMemberPersonIds.push(member.key);
+                    });
+
+                    if (diaryOwnerPersonMemberPersonIds.length > 0) {
+                        let tokens = [];
+                        let notificationTokenPromises = [];
+                        let diaryOwnerPersonMemberUserIds = {};
+
+                        for (let index in diaryOwnerPersonMemberPersonIds) {
+                            let diaryOwnerPersonMemberPersonId = diaryOwnerPersonMemberPersonIds[index];
+
+                            notificationTokenPromises.push(admin.database().ref(`/persons/${diaryOwnerPersonMemberPersonId}/userId`).once("value").then(snapshot => {
+                                let diaryOwnerPersonMemberUserId = snapshot.val();
+
+                                if (diaryOwnerPersonMemberUserId) {
+                                    if (!diaryOwnerPersonMemberUserIds[diaryOwnerPersonMemberUserId] && diaryOwnerPersonMemberUserId !== activity.userId) {
+                                        diaryOwnerPersonMemberUserIds[diaryOwnerPersonMemberUserId] = true;
+
+                                        return admin.database().ref("/notificationTokens").orderByChild("userId").equalTo(diaryOwnerPersonMemberUserId).once("value").then(snapshot => {
+                                            snapshot.forEach(notificationToken => {
+                                                tokens.push(notificationToken.key);
+                                            });
+                                        }).catch(reason => {
+                                            //TODODEV
+                                            console.log(`NotificationTokens query failed for dirayId '${diaryId}' of activityId '${activityId}' for DiaryOwnerPerson's member with UserId '${diaryOwnerPersonMemberUserId}'.`, reason);
+                                        });
+                                    } else {
+                                        return Promise.resolve();
+                                    }
+                                } else {
+                                    //TODODEV
+                                    console.log(`Person's UserId not found for dirayId '${diaryId}' of activityId '${activityId}' for DiaryOwnerPerson's member with PersonId '${diaryOwnerPersonMemberPersonId}'.`);
+                                }
+                            }).catch(reason => {
+                                //TODODEV
+                                console.log(`Person's UserId query failed for dirayId '${diaryId}' of activityId '${activityId}' for DiaryOwnerPerson's member with PersonId '${diaryOwnerPersonMemberPersonId}'.`, reason);
+                            }));
+                        }
+
+                        return Promise.all(notificationTokenPromises).then(() => {
+                            if (tokens.length > 0) {
+                                let notificationMessages = {};
+                                let formatString = (stringToFormat, values) => {
+                                    if (stringToFormat && values && values.length && values.length > 0) {
+                                        for (let index = 0; index < values.length; index++) {
+                                            stringToFormat = stringToFormat.replace(new RegExp("\\{" + index + "\\}", "gm"), (values[index] || ""));
+                                        }
+                                    }
+
+                                    return stringToFormat;
+                                };
+
+                                for (let language in i18n) {
+                                    let notificationMessageTemplate = i18n[language].labelResources.activities[activity.activityType];
+
+                                    if (notificationMessageTemplate) {
+                                        let notificationMessage;
+
+                                        switch (activity.activityType) {
+                                            case activityTypes.diaryAdded:
+                                            case activityTypes.diaryDeleted:
+                                            case activityTypes.diaryLiked:
+                                            case activityTypes.diaryCommented:
+                                                notificationMessage = formatString(notificationMessageTemplate, [
+                                                    activity.userName || ""
+                                                    , diaryName || ""
+                                                    , (activity.createdOn ? DateTransformation.transformDate(activity.createdOn) : "")
+                                                ]);
+
+                                                break;
+                                            case activityTypes.entryAdded:
+                                            case activityTypes.entryDeleted:
+                                            case activityTypes.entryLiked:
+                                            case activityTypes.entryCommented:
+                                                notificationMessage = formatString(notificationMessageTemplate, [
+                                                    activity.userName || ""
+                                                    , (activity.context && activity.context.contents && activity.context.contents.entry ? activity.context.contents.entry : "")
+                                                    , diaryName || ""
+                                                    , (activity.createdOn ? DateTransformation.transformDate(activity.createdOn) : "")
+                                                ]);
+
+                                                break;
+                                            case activityTypes.storyAdded:
+                                            case activityTypes.storyDeleted:
+                                                notificationMessage = formatString(notificationMessageTemplate, [
+                                                    activity.userName || ""
+                                                    , (activity.context && activity.context.contents && activity.context.contents.story ? activity.context.contents.story : "")
+                                                    , (activity.context && activity.context.contents && activity.context.contents.entry ? activity.context.contents.entry : "")
+                                                    , diaryName || ""
+                                                    , (activity.createdOn ? DateTransformation.transformDate(activity.createdOn) : "")
+                                                ]);
+
+                                                break;
+                                            case activityTypes.storyLiked:
+                                            case activityTypes.storyCommented:
+                                                notificationMessage = formatString(notificationMessageTemplate, [
+                                                    activity.userName || ""
+                                                    , (activity.context && activity.context.contents && activity.context.contents.story ? activity.context.contents.story : "")
+                                                    , (activity.createdOn ? DateTransformation.transformDate(activity.createdOn) : "")
+                                                ]);
+
+                                                break;
+                                            case activityTypes.imageAdded:
+                                            case activityTypes.imageDeleted:
+                                                notificationMessage = formatString(notificationMessageTemplate, [
+                                                    activity.userName || ""
+                                                    , (activity.context && activity.context.contents && activity.context.contents.entry ? activity.context.contents.entry : "")
+                                                    , diaryName || ""
+                                                    , (activity.createdOn ? DateTransformation.transformDate(activity.createdOn) : "")
+                                                ]);
+
+                                                break;
+                                            case activityTypes.imageLiked:
+                                            case activityTypes.imageCommented:
+                                                notificationMessage = formatString(notificationMessageTemplate, [
+                                                    activity.userName || ""
+                                                    , (activity.createdOn ? DateTransformation.transformDate(activity.createdOn) : "")
+                                                ]);
+
+                                                break;
+                                            case activityTypes.collectionAdded:
+                                                notificationMessage = formatString(notificationMessageTemplate, [
+                                                    activity.userName || ""
+                                                    , (activity.context && activity.context.contentCount ? activity.context.contentCount : 0)
+                                                    , (activity.context && activity.context.title ? activity.context.title : "")
+                                                    , (activity.context && activity.context.contents && activity.context.contents.entry ? activity.context.contents.entry : "")
+                                                    , diaryName || ""
+                                                    , (activity.createdOn ? DateTransformation.transformDate(activity.createdOn) : "")
+                                                ]);
+
+                                                break;
+                                            case activityTypes.collectionDeleted:
+                                                notificationMessage = formatString(notificationMessageTemplate, [
+                                                    activity.userName || ""
+                                                    , (activity.context && activity.context.contentCount ? activity.context.contentCount : 0)
+                                                    , (activity.context && activity.context.contents && activity.context.contents.entry ? activity.context.contents.entry : "")
+                                                    , diaryName || ""
+                                                    , (activity.createdOn ? DateTransformation.transformDate(activity.createdOn) : "")
+                                                ]);
+
+                                                break;
+                                            case activityTypes.collectionLiked:
+                                            case activityTypes.collectionCommented:
+                                                notificationMessage = formatString(notificationMessageTemplate, [
+                                                    activity.userName || ""
+                                                    , (activity.context && activity.context.contents && activity.context.contents.entry ? activity.context.contents.entry : "")
+                                                    , (activity.createdOn ? DateTransformation.transformDate(activity.createdOn) : "")
+                                                ]);
+
+                                                break;
+                                            case activityTypes.videoAdded:
+                                            case activityTypes.videoDeleted:
+                                                notificationMessage = formatString(notificationMessageTemplate, [
+                                                    activity.userName || ""
+                                                    , (activity.context && activity.context.contents && activity.context.contents.entry ? activity.context.contents.entry : "")
+                                                    , diaryName || ""
+                                                    , (activity.createdOn ? DateTransformation.transformDate(activity.createdOn) : "")
+                                                ]);
+
+                                                break;
+                                            case activityTypes.videoLiked:
+                                            case activityTypes.videoCommented:
+                                                notificationMessage = formatString(notificationMessageTemplate, [
+                                                    activity.userName || ""
+                                                    , (activity.createdOn ? DateTransformation.transformDate(activity.createdOn) : "")
+                                                ]);
+
+                                                break;
+                                        }
+
+                                        if (notificationMessage) {
+                                            notificationMessages[language] = notificationMessage;
+                                        } else {
+                                            //TODODEV
+                                            console.log(`Notification message could not be prepared for '${language}' language & '${activity.activityType}' activityType of activity with Id '${activityId}'.`);
+                                        }
+                                    } else {
+                                        //TODODEV
+                                        console.log(`Notification message template not found for '${language}' language & '${activity.activityType}' activityType of activity with Id '${activityId}'.`);
+                                    }
+                                }
+
+                                let userLanguage = "en";
+                                if (notificationMessages[userLanguage]) {
+                                    //You can send messages to up to 1,000 devices in a single request. If you provide an array with over 1,000 registration tokens, the request will fail with a messaging/invalid-recipient error.
+                                    let tokenChunks = [];
+                                    while (tokens.length > 500) {
+                                        tokenChunks.push(tokens.splice(0, 500));
+                                    }
+                                    if (tokens.length > 0) {
+                                        tokenChunks.push(tokens);
+                                    }
+
+                                    let payload = {
+                                        notification: {
+                                            title: i18n[userLanguage].appName //iOS, Android, Web: The notification's title.
+                                            , body: notificationMessages[userLanguage] //iOS, Android, Web: The notification's body text.
+                                            // , badge?: string, //???
+                                            // , clickAction: string, //???
+                                            // , color: string, //???
+                                            // , icon: string, //???
+                                            // , sound: string, //???
+                                            // , tag: string //???
+                                        }
+                                    };
+                                    // payload.data = { key1: "value1", key2: "value2" }; //The keys and values must both be strings. Keys can be any custom string, except for the following reserved strings: "from" & Anything starting with "google."
+
+                                    let sendNotificationPromises = [];
+                                    for (let index in tokenChunks) {
+                                        let tokenChunk = tokenChunks[index];
+
+                                        sendNotificationPromises.push(admin.messaging().sendToDevice(tokenChunk, payload, {
+                                            contentAvailable: true //On iOS, use this field to represent content-available in the APNs payload. When a notification or data message is sent and this is set to true, an inactive client app is awoken. On Android, data messages wake the app by default. On Chrome, this flag is currently not supported.
+                                            , dryRun: false //Whether or not the message should actually be sent. When set to true, allows developers to test a request without actually sending a message. When set to false, the message will be sent.
+                                            , mutableContent: false //On iOS, use this field to represent mutable-content in the APNs payload. When a notification is sent and this is set to true, the content of the notification can be modified before it is displayed, using a Notification Service app extension. On Android and Web, this parameter will be ignored.
+                                            , priority: "high" //The priority of the message. Valid values are "normal" and "high". On iOS, these correspond to APNs priorities 5 and 10. By default, notification messages are sent with high priority, and data messages are sent with normal priority. Normal priority optimizes the client app's battery consumption and should be used unless immediate delivery is required. For messages with normal priority, the app may receive the message with unspecified delay. When a message is sent with high priority, it is sent immediately, and the app can wake a sleeping device and open a network connection to your server.
+                                            , timeToLive: 2419200 //How long (in seconds) the message should be kept in FCM storage if the device is offline. The maximum time to live supported is four weeks, and the default value is also four weeks.  Keep in mind that a time_to_live value of 0 means messages that can't be delivered immediately are discarded.
+                                            // , collapseKey: string //String identifying a group of messages (for example, "Updates Available") that can be collapsed, so that only the last message gets sent when delivery can be resumed. This is used to avoid sending too many of the same messages when the device comes back online or becomes active. There is no guarantee of the order in which messages get sent. A maximum of four different collapse keys is allowed at any given time. This means an FCM connection server can simultaneously store four different send-to-sync messages per client app. If you exceed this number, there is no guarantee which four collapse keys the FCM connection server will keep.
+                                        }).then(response => {
+                                            //TODODEV
+                                            console.log(`Notification Sent Response for language '${userLanguage}' for dirayId '${diaryId}' of activity with Id '${activityId}'.:`, response);
+                                        }).catch(reason => {
+                                            //TODODEV
+                                            console.log(`Notification Sent Reason for language '${userLanguage}' for dirayId '${diaryId}' of activity with Id '${activityId}'.:`, reason);
+                                        }));
+                                    }
+
+                                    return Promise.all(sendNotificationPromises);
+                                } else {
+                                    //TODODEV
+                                    console.log(`Notification message not available for language '${userLanguage}' for dirayId '${diaryId}' of activity with Id '${activityId}'.`);
+                                }
+                            } else {
+                                //TODODEV
+                                console.log(`Notification tockens not available for dirayId '${diaryId}' of activity with Id '${activityId}'.`);
+                            }
+                        });
+                    } else {
+                        //TODODEV
+                        console.log(`DiaryOwnerPerson's members not available for dirayId '${diaryId}' of activity with Id '${activityId}'.`);
+                    }
+                }).catch(reason => {
+                    //TODODEV
+                    console.log(`DiaryOwnerPerson's members not available for dirayId '${diaryId}' of activity with Id '${activityId}'. Reason:`, reason);
+                });
+            } else {
+                //TODODEV
+                console.log(`Diary or DiaryName or DiaryOwnerPersonId not available for dirayId '${diaryId}' of activity with Id '${activityId}'. Diary:`, diary);
+            }
+        }).catch(reason => {
+            //TODODEV
+            console.log(`Diary name not available for dirayId '${diaryId}' of activity with Id '${activityId}'. Reason:`, reason);
+        });
+    }
+});
+// [END sendNotificationsOnDiaryActivityTrigger]
+class DateTransformation {
+    static transform(value, args) {
+        value = value + '';
+        args = args + '';
+
+        return moment(value).format(args)
+    }
+
+    static transformDate(value) {
+        if (DateTransformation.isToday(value)) {
+            return DateTransformation.transform(value, "LT");
+        } else if (DateTransformation.isYesterday(value)) {
+            return DateTransformation.transform(value, "[Yesterday at] LT");
+        }
+
+        return DateTransformation.transform(value, "lll");
+    }
+
+    static isToday(value) {
+        return moment(value).isSame(moment().clone().startOf('day'), 'd');
+    }
+
+    static isYesterday(value) {
+        return moment(value).isSame(moment().subtract(1, 'days').startOf('day'), 'd');
+    }
+
+    static isWithinAWeek(value) {
+        return moment(value).isAfter(moment().subtract(7, 'days').startOf('day'));
+    }
+
+    static isTwoWeeksOrMore(value) {
+        return !DateTransformation.isWithinAWeek(moment(value));
+    }
+}
+// [END sendNotificationsOnDiaryActivity]
+
 // [START sendTestNotification]
 /**
  * Handle sending test notifications to a user.
@@ -677,65 +1026,63 @@ exports.handleSocialLogin = functions.https.onRequest((req, res) => {
 exports.sendTestNotification = functions.https.onRequest((req, res) => {
     cors(req, res, () => {
         if (req && req.query && req.query.userId && req.query.title && req.query.body) {
-console.log("Request Data:", {
-    userId: req.query.userId,
-    title : req.query.title,
-    body : req.query.body,
-    typeOfData: typeof (req.query.data),
-    data: req.query.data
-});
             admin.database().ref("/notificationTokens").orderByChild("userId").equalTo(req.query.userId).once("value").then(snapshot => {
                 let notificationTokens = snapshot.val();
                 if (notificationTokens) {
-console.log("NotificationTockens:", notificationTokens);
                     let tokens = [];
                     for (let notificationToken in notificationTokens) {
                         tokens.push(notificationToken);
                     }
-console.log("Tockens:", tokens);
-                    if (tokens.length > 0) { //TODODEV: You can send messages to up to 1,000 devices in a single request. If you provide an array with over 1,000 registration tokens, the request will fail with a messaging/invalid-recipient error.
+                    if (tokens.length > 0) {
+                        //You can send messages to up to 1,000 devices in a single request. If you provide an array with over 1,000 registration tokens, the request will fail with a messaging/invalid-recipient error.
+                        let tokenChunks = [];
+                        while (tokens.length > 500) {
+                            tokenChunks.push(tokens.splice(0, 500));
+                        }
+                        if (tokens.length > 0) {
+                            tokenChunks.push(tokens);
+                        }
+
                         let payload = {
                             notification: {
-                                title: req.query.title, //iOS, Android, Web: The notification's title.
-                                body: req.query.body, //iOS, Android, Web: The notification's body text.
-                                // badge?: string, //???
-                                // clickAction: string, //???
-                                // color: string, //???
-                                // icon: string, //???
-                                // sound: string, //???
-                                // tag: string, //???
+                                title: req.query.title //iOS, Android, Web: The notification's title.
+                                , body: req.query.body //iOS, Android, Web: The notification's body text.
+                                // , badge?: string, //???
+                                // , clickAction: string, //???
+                                // , color: string, //???
+                                // , icon: string, //???
+                                // , sound: string, //???
+                                // , tag: string //???
                             }
                         };
                         if (req.query.data && Object.keys(req.query.data).length > 0) {
                             payload.data = req.query.data; //The keys and values must both be strings. Keys can be any custom string, except for the following reserved strings: "from" & Anything starting with "google."
                         }
 
-                        admin.messaging().sendToDevice(tokens, payload, {
-                            contentAvailable: true, //On iOS, use this field to represent content-available in the APNs payload. When a notification or data message is sent and this is set to true, an inactive client app is awoken. On Android, data messages wake the app by default. On Chrome, this flag is currently not supported.
-                            dryRun: false, //Whether or not the message should actually be sent. When set to true, allows developers to test a request without actually sending a message. When set to false, the message will be sent.
-                            mutableContent: false, //On iOS, use this field to represent mutable-content in the APNs payload. When a notification is sent and this is set to true, the content of the notification can be modified before it is displayed, using a Notification Service app extension. On Android and Web, this parameter will be ignored.
-                            priority: "high", //The priority of the message. Valid values are "normal" and "high". On iOS, these correspond to APNs priorities 5 and 10. By default, notification messages are sent with high priority, and data messages are sent with normal priority. Normal priority optimizes the client app's battery consumption and should be used unless immediate delivery is required. For messages with normal priority, the app may receive the message with unspecified delay. When a message is sent with high priority, it is sent immediately, and the app can wake a sleeping device and open a network connection to your server.
-                            timeToLive: 2419200, //How long (in seconds) the message should be kept in FCM storage if the device is offline. The maximum time to live supported is four weeks, and the default value is also four weeks.  Keep in mind that a time_to_live value of 0 means messages that can't be delivered immediately are discarded.
-                            // collapseKey: string, //String identifying a group of messages (for example, "Updates Available") that can be collapsed, so that only the last message gets sent when delivery can be resumed. This is used to avoid sending too many of the same messages when the device comes back online or becomes active. There is no guarantee of the order in which messages get sent. A maximum of four different collapse keys is allowed at any given time. This means an FCM connection server can simultaneously store four different send-to-sync messages per client app. If you exceed this number, there is no guarantee which four collapse keys the FCM connection server will keep.
-                        }).then(response => {
-console.log("Notification Sent:", response);
-                            res.status(200).send();
-                        }).catch(reason => {
-console.log("Notification Sent Reason:", reason);
-                            res.status(200).send();
-                        });
+                        for (let index in tokenChunks) {
+                            let tokenChunk = tokenChunks[index];
+
+                            admin.messaging().sendToDevice(tokenChunk, payload, {
+                                contentAvailable: true //On iOS, use this field to represent content-available in the APNs payload. When a notification or data message is sent and this is set to true, an inactive client app is awoken. On Android, data messages wake the app by default. On Chrome, this flag is currently not supported.
+                                , dryRun: false //Whether or not the message should actually be sent. When set to true, allows developers to test a request without actually sending a message. When set to false, the message will be sent.
+                                , mutableContent: false //On iOS, use this field to represent mutable-content in the APNs payload. When a notification is sent and this is set to true, the content of the notification can be modified before it is displayed, using a Notification Service app extension. On Android and Web, this parameter will be ignored.
+                                , priority: "high" //The priority of the message. Valid values are "normal" and "high". On iOS, these correspond to APNs priorities 5 and 10. By default, notification messages are sent with high priority, and data messages are sent with normal priority. Normal priority optimizes the client app's battery consumption and should be used unless immediate delivery is required. For messages with normal priority, the app may receive the message with unspecified delay. When a message is sent with high priority, it is sent immediately, and the app can wake a sleeping device and open a network connection to your server.
+                                , timeToLive: 2419200 //How long (in seconds) the message should be kept in FCM storage if the device is offline. The maximum time to live supported is four weeks, and the default value is also four weeks.  Keep in mind that a time_to_live value of 0 means messages that can't be delivered immediately are discarded.
+                                // , collapseKey: string //String identifying a group of messages (for example, "Updates Available") that can be collapsed, so that only the last message gets sent when delivery can be resumed. This is used to avoid sending too many of the same messages when the device comes back online or becomes active. There is no guarantee of the order in which messages get sent. A maximum of four different collapse keys is allowed at any given time. This means an FCM connection server can simultaneously store four different send-to-sync messages per client app. If you exceed this number, there is no guarantee which four collapse keys the FCM connection server will keep.
+                            }).then(response => {
+                                console.log("Notification Sent:", response);
+                                res.status(200).send();
+                            }).catch(reason => {
+                                console.log("Notification Sent Reason:", reason);
+                                res.status(200).send();
+                            });
+                        }
                     } else {
-console.log("NotificationTokens not found");
                         res.status(200).send();
                     }
                 }
-else {
-    console.log("NotificationTokens not found");
-}
-            }).catch((
-reason
-            ) => {
-console.log("NotificationTokens query Reason: ", reason);
+            }).catch(reason => {
+                console.log("NotificationTokens query Reason: ", reason);
                 res.status(200).send();
             });
         } else {

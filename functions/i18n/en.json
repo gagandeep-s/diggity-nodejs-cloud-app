@@ -1,0 +1,36 @@
+{
+    "appName": "Nestled Time",
+    "labelResources": {
+        "activities": {
+            "diary_added": "‘{0}’ created a new diary ‘{1}’ {2}.",
+            "diary_deleted": "‘{0}’ deleted diary ‘{1}’ {2}.",
+            "diary_like": "‘{0}’ liked your diary ‘{1}’ {2}.",
+            "diary_commented": "‘{0}’ commented on your diary ‘{1}’ {2}.",
+
+            "entry_added": "‘{0}’ created added a new entry ‘{1}’ in your diary ‘{2}’ {3}.",
+            "entry_deleted": "‘{0}’ deleted entry ‘{1}’ from your diary ‘{2}’ {3}.",
+            "entry_like": "‘{0}’ liked your entry ‘{1}’ in your diary ‘{2}’ {3}.",
+            "entry_commented": "‘{0}’ commented on your entry ‘{1}’ in your diary ‘{2}’ {3}.",
+
+            "story_added": "{0} added a new story {1} to entry {2} in your diary {3} {4}.",
+            "story_deleted": "‘{0}’ deleted story ‘{1}’ from entry ‘{2}’ of your diary ‘{3}’ {4}.",
+            "story_like": "‘{0}’ liked your story ‘{1}’ {2}.",
+            "story_commented": "‘{0}’ commented on your story ‘{1}’ {2}.",
+
+            "image_added": "‘{0}’ added a new photo to entry ‘{1}’ in your diary ‘{2}’ {3}.",
+            "image_deleted": "‘{0}’ deleted a photo from entry ‘{1}’ of your diary ‘{2}’ {3}.",
+            "image_like": "‘{0}’ liked your photo {1}.",
+            "image_commented": "‘{0}’ commented on your photo {1}.",
+
+            "collection_added": "‘{0}’ added {1} new photos in album ‘{2}’ to entry ‘{3}’ in your diary ‘{4}’ {5}.",
+            "collection_deleted": "‘{0}’ deleted {1} photos from entry ‘{2}’ of your diary ‘{3}’ {4}.",
+            "collection_like": "‘{0}’ liked your album ‘{1}’ {2}.",
+            "collection_commented": "‘{0}’ commented on your album ‘{1}’ {2}.",
+
+            "video_added": "‘{0}’ added a new video to entry ‘{1}’ in your diary ‘{2}’ {3}.",
+            "video_deleted": "‘{0}’ deleted a video from entry ‘{1}’ of your diary ‘{2}’ {3}.",
+            "video_like": "‘{0}’ liked your video {1}.",
+            "video_commented": "‘{0}’ commented on your video {1}."
+        }
+    }
+}
